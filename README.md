@@ -13,6 +13,7 @@ PAN-OS Security Advisor
 **Professional-grade PAN-OS vulnerability assessment and upgrade planning tool**
 
 *Developed by Zero One Six Security, LLC (ZER016) - https://zero16sec.com*
+*Enterprise Security for Every Enterprise*
 
 ---
 
@@ -68,20 +69,13 @@ The ZER016 PAN-OS Security Advisor is an enterprise-grade command-line tool desi
 - **Internet connectivity** for API access
 - **Command-line interface** (Windows, macOS, Linux)
 
-### Python Dependencies
-```bash
-pip install requests
-```
-
 ### Network Requirements
 - Access to `security.paloaltonetworks.com`
 - Access to `endoflife.date`
 
 ---
 
-## Installation
-
-### Direct Download
+## Installation & Usage
 ```bash
 # Clone the repository
 git clone https://github.com/zero16sec/panos-security-advisor.git
@@ -103,9 +97,6 @@ python main.py --help
 
 ---
 
-## Usage
-
-### Basic Usage
 ```bash
 # Analyze a specific PAN-OS version
 python main.py 10.2.11-h2
@@ -280,18 +271,6 @@ curl -I https://security.paloaltonetworks.com/
 curl -I https://endoflife.date/api/panos.json
 ```
 
-#### Python Dependencies
-```bash
-# Verify Python version
-python --version  # Should be 3.7+
-
-# Install/upgrade requests
-pip install --upgrade requests
-
-# Check installed packages
-pip list | grep requests
-```
-
 #### Version Format Errors
 ```
 ZER016 ERROR: Invalid PAN-OS version format: xyz
@@ -329,11 +308,6 @@ API URL: https://security.paloaltonetworks.com/json/?version=PAN-OS+10.2.11-h2&s
 - **HTTPS Only**: All API communications use encrypted connections
 - **Public APIs**: Accesses only publicly available security data
 - **No Data Transmission**: Your firewall configurations are not transmitted
-
-### Enterprise Deployment
-- **Proxy Support**: Compatible with corporate proxy environments
-- **Air-Gapped Networks**: Can be run with cached API responses
-- **Compliance Ready**: Supports SOX, PCI-DSS, and other regulatory frameworks
 
 ---
 
@@ -384,15 +358,18 @@ See the [LICENSE](LICENSE) file for complete terms and conditions.
 Zero One Six Security, LLC (ZER016) specializes in enterprise security solutions and professional-grade security tools. Our mission is to provide IT security professionals with the intelligence and tools needed to maintain robust security postures in complex enterprise environments.
 
 ### Contact Information
-- **Website**: [Coming Soon]
-- **Email**: [Contact Information]
-- **GitHub**: [@zer016-security](https://github.com/zer016-security)
+- **Website**: https://zero16sec.com
+- **Email**: sales@zero16sec.com
+- **GitHub**: https://github.com/zer016sec
 
 ### Professional Services
-- Enterprise security assessments
-- Custom security tool development
-- Security architecture consulting
-- Compliance and audit support
+- Enterprise Security Assessments
+- Automation and Tool Development
+- Security & Infrastructure Architecture Consulting
+- Compliance and Audit Support
+- Asset Procurement
+- Professional Services
+- Adaptive Operations Partner / Daily Operations Management
 
 ---
 
@@ -405,16 +382,6 @@ Zero One Six Security, LLC (ZER016) specializes in enterprise security solutions
 
 ---
 
-## Project Statistics
-
-![GitHub Stars](https://img.shields.io/github/stars/zer016-security/panos-security-advisor)
-![GitHub Forks](https://img.shields.io/github/forks/zer016-security/panos-security-advisor)
-![GitHub Issues](https://img.shields.io/github/issues/zer016-security/panos-security-advisor)
-![License](https://img.shields.io/badge/license-ZER016%20Custom-blue)
-![Python Version](https://img.shields.io/badge/python-3.7%2B-brightgreen)
-
----
-
-*Enterprise Security Solutions - Professional Grade Tools*
+*Enterprise Security for Every Enterprise*
 
 **© 2025 Zero One Six Security, LLC. All rights reserved.**
