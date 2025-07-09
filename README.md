@@ -13,6 +13,7 @@ PAN-OS Security Advisor
 **Professional-grade PAN-OS vulnerability assessment and upgrade planning tool**
 
 *Developed by Zero One Six Security, LLC (ZER016) - https://zero16sec.com*
+
 *Enterprise Security for Every Enterprise*
 
 ---
