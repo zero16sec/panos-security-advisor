@@ -361,7 +361,7 @@ Zero One Six Security, LLC (ZER016) specializes in enterprise security solutions
 ### Contact Information
 - **Website**: https://zero16sec.com
 - **Email**: sales@zero16sec.com
-- **GitHub**: https://github.com/zer016sec
+- **GitHub**: https://github.com/zero16sec
 
 ### Professional Services
 - Enterprise Security Assessments
