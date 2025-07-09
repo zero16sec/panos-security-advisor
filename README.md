@@ -74,36 +74,31 @@ pip install requests
 ```
 
 ### Network Requirements
-- Access to `security.paloaltonetworks.com` (HTTPS/443)
-- Access to `endoflife.date` (HTTPS/443)
+- Access to `security.paloaltonetworks.com`
+- Access to `endoflife.date`
 
 ---
 
 ## Installation
 
-### Method 1: Direct Download
+### Direct Download
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/panos-security-advisor.git
+git clone https://github.com/zero16sec/panos-security-advisor.git
 cd panos-security-advisor
+
+# Install local venv or activate your profile venv
+python -m venv venv
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
-
-# Make executable (Linux/macOS)
-chmod +x panos_security_advisor.py
-```
-
-### Method 2: Standalone Script
-```bash
-# Download the script directly
-wget https://raw.githubusercontent.com/your-org/panos-security-advisor/main/panos_security_advisor.py
 
 # Install dependencies
 pip install requests
 
 # Run directly
-python panos_security_advisor.py --help
+python main.py --help
 ```
 
 ---
@@ -113,16 +108,16 @@ python panos_security_advisor.py --help
 ### Basic Usage
 ```bash
 # Analyze a specific PAN-OS version
-python panos_security_advisor.py 10.2.11-h2
+python main.py 10.2.11-h2
 
 # Export results to CSV
-python panos_security_advisor.py 10.2.11-h2 --csv security_report.csv
+python main.py 10.2.11-h2 --csv security_report.csv
 
 # Show complete EOL analysis
-python panos_security_advisor.py 10.2.11-h2 --show-eol
+python main.py 10.2.11-h2 --show-eol
 
 # Include expired versions in EOL data
-python panos_security_advisor.py 10.2.11-h2 --show-eol --show-expired
+python main.py 10.2.11-h2 --show-eol --show-expired
 ```
 
 ### Command-Line Arguments
