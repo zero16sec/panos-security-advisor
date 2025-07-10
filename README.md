@@ -71,7 +71,7 @@ The ZER016 PAN-OS Security Advisor is an enterprise-grade command-line tool desi
 
 ### Python Dependencies
 ```bash
-pip install requests beautifulsoup4
+pip install -r requirements.txt
 ```
 
 ### Network Requirements
@@ -88,8 +88,10 @@ pip install requests beautifulsoup4
 git clone https://github.com/zero16sec/panos-security-advisor.git
 cd panos-security-advisor
 
-# Install dependencies
-pip install requests beautifulsoup4
+#Activate or build a venv
+python -m venv venv
+-or-
+venv/bin/activate
 
 # Run directly
 python main.py --help
