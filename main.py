@@ -34,7 +34,7 @@ UPGRADE STRATEGIES:
 • CONSERVATIVE: Stays within current revision train (lowest risk)
 • COMPREHENSIVE: Most frequently recommended across all severity levels
 • SECURITY: Prioritizes Critical/High severity vulnerabilities
-• EOL_MIGRATION: Automatic recommendation when version approaches end-of-life
+• MIGRATE_X.Y: Migration to newer family with CVE analysis
 
 TARGET AUDIENCE:
 • IT Security Professionals
@@ -69,6 +69,12 @@ import argparse
 from urllib.parse import quote
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
+
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
 
 # ============================================================================
 # ZER016 BRANDING
@@ -112,13 +118,10 @@ class PanOSVersion:
     
     def _parse_version(self, version: str) -> Tuple[int, int, int, int]:
         """Parse PAN-OS version string into components."""
-        # Remove any >= prefix and clean up
         version = re.sub(r'^>=?\s*', '', version).strip()
         
-        # Match pattern like 10.2.11-h2 or 10.2.11
         match = re.match(r'^(\d+)\.(\d+)\.(\d+)(?:-h(\d+))?', version)
         if not match:
-            # Try simpler pattern like 10.2
             simple_match = re.match(r'^(\d+)\.(\d+)$', version)
             if simple_match:
                 return int(simple_match.group(1)), int(simple_match.group(2)), 0, 0
@@ -131,40 +134,187 @@ class PanOSVersion:
         
         return major, minor, patch, hotfix
     
+    def _version_tuple(self):
+        """Return version as tuple for comparison."""
+        return (self.major, self.minor, self.patch, self.hotfix)
+    
     def __ge__(self, other):
-        """Greater than or equal comparison."""
         if not isinstance(other, PanOSVersion):
             return NotImplemented
-        
-        return (self.major, self.minor, self.patch, self.hotfix) >= \
-               (other.major, other.minor, other.patch, other.hotfix)
+        return self._version_tuple() >= other._version_tuple()
+    
+    def __gt__(self, other):
+        if not isinstance(other, PanOSVersion):
+            return NotImplemented
+        return self._version_tuple() > other._version_tuple()
+    
+    def __le__(self, other):
+        if not isinstance(other, PanOSVersion):
+            return NotImplemented
+        return self._version_tuple() <= other._version_tuple()
+    
+    def __lt__(self, other):
+        if not isinstance(other, PanOSVersion):
+            return NotImplemented
+        return self._version_tuple() < other._version_tuple()
+    
+    def __eq__(self, other):
+        if not isinstance(other, PanOSVersion):
+            return NotImplemented
+        return self._version_tuple() == other._version_tuple()
+    
+    def __ne__(self, other):
+        if not isinstance(other, PanOSVersion):
+            return NotImplemented
+        return self._version_tuple() != other._version_tuple()
     
     def __str__(self):
         if self.hotfix > 0:
             return f"{self.major}.{self.minor}.{self.patch}-h{self.hotfix}"
         return f"{self.major}.{self.minor}.{self.patch}"
 
-def fetch_panos_eol_data():
-    """Fetch PAN-OS End of Life data from endoflife.date API - ZER016 Enhanced."""
+def get_available_panos_versions():
+    """Get all available PAN-OS versions from the security portal datalist."""
+    if not BS4_AVAILABLE:
+        print("ZER016 ERROR: BeautifulSoup not available. Install with: pip install beautifulsoup4")
+        return []
+    
     try:
-        url = "https://endoflife.date/api/panos.json"
+        url = "https://security.paloaltonetworks.com"
         response = requests.get(url, timeout=30)
         response.raise_for_status()
-        return response.json()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        version_datalist = soup.find('datalist', {'id': 'dl-version'})
+        if not version_datalist:
+            print("ZER016 WARNING: Could not find version datalist on PA security portal")
+            return []
+        
+        available_versions = []
+        version_options = version_datalist.find_all('option')
+        
+        for option in version_options:
+            version_value = option.get('value', '')
+            if version_value.startswith('PAN-OS '):
+                clean_version = version_value.replace('PAN-OS ', '').strip()
+                if clean_version and clean_version not in ['', 'undefined']:
+                    available_versions.append(clean_version)
+        
+        return sorted(set(available_versions))
+        
+    except Exception as e:
+        print(f"ZER016 ERROR: Unable to fetch available versions: {e}")
+        return []
+
+def get_latest_version_for_family(version_family: str, available_versions: List[str]) -> str:
+    """Get the latest version for a given family from available versions list."""
+    try:
+        family_versions = []
+        
+        for version_str in available_versions:
+            try:
+                parsed_ver = PanOSVersion(version_str)
+                if parsed_ver.family == version_family:
+                    family_versions.append(parsed_ver)
+            except ValueError:
+                continue
+        
+        if family_versions:
+            latest = max(family_versions, key=lambda v: (v.major, v.minor, v.patch, v.hotfix))
+            return str(latest)
+        else:
+            return f"{version_family}.x"
+            
+    except Exception:
+        return f"{version_family}.x"
+
+def parse_panos_eol_data():
+    """Parse PAN-OS End of Life data from official Palo Alto Networks EOL page."""
+    if not BS4_AVAILABLE:
+        print("ZER016 ERROR: BeautifulSoup not available. Install with: pip install beautifulsoup4")
+        return []
+    
+    try:
+        url = "https://www.paloaltonetworks.com/services/support/end-of-life-announcements/end-of-life-summary"
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        eol_data = []
+        
+        tables = soup.find_all('table')
+        panos_table = None
+        
+        for table in tables:
+            header_text = table.get_text()
+            if 'PAN-OS' in header_text and 'Panorama' in header_text:
+                panos_table = table
+                break
+        
+        if not panos_table:
+            print("ZER016 WARNING: Could not find PAN-OS EOL table on PA website")
+            return []
+        
+        rows = panos_table.find_all('tr')
+        
+        for row in rows:
+            cells = row.find_all(['td', 'th'])
+            if len(cells) >= 3:
+                cell_texts = [cell.get_text().strip() for cell in cells]
+                
+                if not cell_texts[0] or cell_texts[0] in ['Version', 'PAN-OS & Panorama', '']:
+                    continue
+                
+                version_text = cell_texts[0]
+                if not re.match(r'^\d+\.\d+', version_text):
+                    continue
+                
+                version = re.sub(r'\+.*$', '', version_text)
+                release_date = cell_texts[1] if len(cell_texts) > 1 else ''
+                eol_date = cell_texts[2] if len(cell_texts) > 2 else ''
+                
+                try:
+                    if release_date:
+                        parsed_release = datetime.strptime(release_date, "%B %d, %Y")
+                        release_iso = parsed_release.strftime("%Y-%m-%d")
+                    else:
+                        release_iso = ''
+                    
+                    if eol_date:
+                        parsed_eol = datetime.strptime(eol_date, "%B %d, %Y")
+                        eol_iso = parsed_eol.strftime("%Y-%m-%d")
+                    else:
+                        eol_iso = ''
+                    
+                    eol_data.append({
+                        'cycle': version,
+                        'release_date': release_iso,
+                        'eol': eol_iso,
+                        'latest': ''
+                    })
+                    
+                except ValueError:
+                    continue
+        
+        return eol_data
+        
     except requests.exceptions.RequestException as e:
-        print(f"ZER016 ERROR: Unable to fetch EOL data: {e}")
+        print(f"ZER016 ERROR: Unable to fetch EOL data from PA website: {e}")
+        return []
+    except Exception as e:
+        print(f"ZER016 ERROR: Unable to parse EOL data from PA website: {e}")
         return []
 
 def check_version_eol_status(input_version: PanOSVersion):
     """Check if the input version is approaching or past EOL."""
-    eol_data = fetch_panos_eol_data()
+    eol_data = parse_panos_eol_data()
     if not eol_data:
         return None
     
+    available_versions = get_available_panos_versions()
     today = datetime.now(timezone.utc).date()
     input_family = input_version.family
     
-    # Find matching EOL entry
     for entry in eol_data:
         version_cycle = entry.get('cycle', '')
         if version_cycle == input_family:
@@ -173,116 +323,41 @@ def check_version_eol_status(input_version: PanOSVersion):
                 eol_date = datetime.strptime(eol_str, "%Y-%m-%d").date()
                 days_left = (eol_date - today).days
                 
+                latest = get_latest_version_for_family(input_family, available_versions)
+                entry['latest'] = latest
+                
                 return {
                     'version': version_cycle,
-                    'latest': entry.get('latest', 'N/A'),
-                    'eol_date': eol_date,
-                    'days_left': days_left,
-                    'is_expired': days_left < 0,
-                    'is_warning': days_left <= 365  # Warn if less than 1 year
-                }
-    
-    return None
-
-def find_next_supported_version(current_version: PanOSVersion, eol_data: List[Dict]) -> Optional[str]:
-    """Find the next lowest supported version family that's not approaching EOL."""
-    if not eol_data:
-        return None
-    
-    today = datetime.now(timezone.utc).date()
-    current_family = current_version.family
-    
-    # Parse all version families and their EOL status
-    version_families = []
-    for entry in eol_data:
-        version_cycle = entry.get('cycle', '')
-        eol_str = entry.get('eol')
-        latest = entry.get('latest', '')
-        
-        if eol_str and version_cycle:
-            try:
-                # Parse version family for comparison
-                major, minor = map(int, version_cycle.split('.'))
-                eol_date = datetime.strptime(eol_str, "%Y-%m-%d").date()
-                days_left = (eol_date - today).days
-                
-                version_families.append({
-                    'family': version_cycle,
-                    'major': major,
-                    'minor': minor,
                     'latest': latest,
                     'eol_date': eol_date,
                     'days_left': days_left,
-                    'is_supported': days_left > 365  # Consider supported if >1 year left
-                })
-            except (ValueError, AttributeError):
-                continue
-    
-    # Sort by version number
-    version_families.sort(key=lambda x: (x['major'], x['minor']))
-    
-    # Find current version in the list
-    current_major, current_minor = current_version.major, current_version.minor
-    
-    # Find the next higher version that's well-supported
-    for family in version_families:
-        if (family['major'] > current_major or 
-            (family['major'] == current_major and family['minor'] > current_minor)):
-            if family['is_supported']:
-                return family['latest']
-    
-    # If no higher version found, return the latest supported version available
-    supported_families = [f for f in version_families if f['is_supported']]
-    if supported_families:
-        latest_supported = max(supported_families, key=lambda x: (x['major'], x['minor']))
-        return latest_supported['latest']
-    
-    return None
-    """Check if the input version is approaching or past EOL."""
-    eol_data = fetch_panos_eol_data()
-    if not eol_data:
-        return None
-    
-    today = datetime.now(timezone.utc).date()
-    input_family = input_version.family
-    
-    # Find matching EOL entry
-    for entry in eol_data:
-        version_cycle = entry.get('cycle', '')
-        if version_cycle == input_family:
-            eol_str = entry.get('eol')
-            if eol_str:
-                eol_date = datetime.strptime(eol_str, "%Y-%m-%d").date()
-                days_left = (eol_date - today).days
-                
-                return {
-                    'version': version_cycle,
-                    'latest': entry.get('latest', 'N/A'),
-                    'eol_date': eol_date,
-                    'days_left': days_left,
                     'is_expired': days_left < 0,
-                    'is_warning': days_left <= 365  # Warn if less than 1 year
+                    'is_warning': days_left <= 365
                 }
     
     return None
 
 def display_eol_summary(show_expired=False):
-    """Display PAN-OS EOL summary table - ZER016 Enterprise Edition."""
-    eol_data = fetch_panos_eol_data()
+    """Display PAN-OS EOL summary table."""
+    eol_data = parse_panos_eol_data()
     if not eol_data:
-        print("ZER016 WARNING: Could not fetch EOL data.")
+        print("ZER016 WARNING: Could not fetch official PANW EOL data.")
         return
     
+    available_versions = get_available_panos_versions()
     today = datetime.now(timezone.utc).date()
     
-    print(f"\nZER016 PAN-OS END OF LIFE ANALYSIS:")
+    print(f"\nZER016 PAN-OS END OF LIFE ANALYSIS (Official PANW Data):")
     print("=" * 80)
     print(f"{'Version':<10} {'Latest':<20} {'EOL Date':<12} {'Days Left':<11} {'Status':<15}")
     print("-" * 80)
     
     for entry in eol_data:
         version = entry.get('cycle', 'N/A')
-        latest = entry.get('latest', 'N/A')
+        
+        latest = get_latest_version_for_family(version, available_versions)
+        entry['latest'] = latest
+        
         eol_str = entry.get('eol')
         
         if eol_str:
@@ -316,23 +391,13 @@ def display_eol_summary(show_expired=False):
         print(f"{color}{version:<10} {latest:<20} {str(eol_date):<12} {days_display:<11} {status:<15}{RESET}")
     
     print("=" * 80)
-    """Extract the major.minor version family from a PAN-OS version."""
-    version = version.replace("PAN-OS ", "").strip()
-    match = re.match(r'^(\d+\.\d+)', version)
-    if match:
-        return match.group(1)
-    else:
-        raise ValueError(f"Invalid PAN-OS version format: {version}")
 
 def fetch_cve_data(version: str) -> List[Dict]:
-    """Fetch CVE data from Palo Alto Networks security API - ZER016 Enhanced."""
+    """Fetch CVE data from Palo Alto Networks security API."""
     encoded_version = quote(f"PAN-OS {version}")
     url = f"https://security.paloaltonetworks.com/json/?version={encoded_version}&sort=-date"
     
     try:
-        print(f"ZER016 STATUS: Fetching CVE data for version: {version}")
-        print(f"API URL: {url}")
-        
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         
@@ -351,20 +416,15 @@ def parse_fix_versions(fix_string: str) -> List[str]:
     if not fix_string or fix_string in ["All", "None"]:
         return [fix_string]
     
-    # Handle cases like "< 10.2.8, >= 10.2.8-h19, >= 10.2.9-h19"
     versions = []
-    
-    # Split by comma and clean up
     parts = [part.strip() for part in fix_string.split(',')]
     
     for part in parts:
-        # Skip "< version" entries as they indicate "not affected in versions below"
         if part.startswith('< '):
             continue
         
-        # Clean up >= prefix and ETA information
-        clean_part = re.sub(r'\s*\[ETA:.*?\]', '', part)  # Remove ETA info
-        clean_part = re.sub(r'^>=?\s*', '', clean_part).strip()  # Remove >= prefix
+        clean_part = re.sub(r'\s*\[ETA:.*?\]', '', part)
+        clean_part = re.sub(r'^>=?\s*', '', clean_part).strip()
         
         if clean_part and clean_part not in ["All", "None"]:
             versions.append(clean_part)
@@ -372,13 +432,11 @@ def parse_fix_versions(fix_string: str) -> List[str]:
     return versions if versions else [fix_string]
 
 def find_applicable_fix_version(cve_data: Dict, version_family: str, input_version: PanOSVersion) -> List[str]:
-    """Find applicable fix versions that are >= input version for the given PAN-OS family.
-    Returns list of version strings for recommendation analysis."""
+    """Find applicable fix versions that are >= input version for the given PAN-OS family."""
     try:
         versions = cve_data.get('version', [])
         fixed_versions = cve_data.get('fixed', [])
         
-        # Find the index of our version family
         family_pattern = f"PAN-OS {version_family}"
         
         for i, ver in enumerate(versions):
@@ -390,7 +448,6 @@ def find_applicable_fix_version(cve_data: Dict, version_family: str, input_versi
                 elif fix_info == "None":
                     return ["No fix available"]
                 
-                # Parse multiple fix versions
                 fix_versions = parse_fix_versions(fix_info)
                 applicable_versions = []
                 
@@ -401,12 +458,10 @@ def find_applicable_fix_version(cve_data: Dict, version_family: str, input_versi
                     
                     try:
                         fix_version_obj = PanOSVersion(fix_ver)
-                        # Only include versions that are >= input version and same family
                         if (fix_version_obj.family == input_version.family and 
                             fix_version_obj >= input_version):
                             applicable_versions.append(str(fix_version_obj))
                     except ValueError:
-                        # If we can't parse it, include it as-is
                         applicable_versions.append(fix_ver)
                 
                 return applicable_versions if applicable_versions else ["No applicable fix (version too old)"]
@@ -416,10 +471,158 @@ def find_applicable_fix_version(cve_data: Dict, version_family: str, input_versi
     except Exception as e:
         return [f"Error parsing fix data: {e}"]
 
+def evaluate_cve_score_for_version(version_str: str) -> Dict:
+    """Evaluate CVE score for a specific version by fetching its CVE data."""
+    try:
+        cve_data = fetch_cve_data(version_str)
+        
+        if not cve_data:
+            return {'score': 0, 'description': '0 CVEs', 'details': []}
+        
+        severity_counts = {'CRITICAL': 0, 'HIGH': 0, 'MEDIUM': 0, 'LOW': 0}
+        details = []
+        
+        for cve in cve_data:
+            severity = cve.get('severity', 'UNKNOWN').upper()
+            if severity in severity_counts:
+                severity_counts[severity] += 1
+                details.append({
+                    'id': cve.get('ID', 'Unknown'),
+                    'severity': severity,
+                    'score': cve.get('baseScore', 'N/A')
+                })
+        
+        total_cves = sum(severity_counts.values())
+        if total_cves == 0:
+            description = '0 CVEs'
+        else:
+            desc_parts = []
+            for severity in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW']:
+                if severity_counts[severity] > 0:
+                    desc_parts.append(f"{severity_counts[severity]} {severity}")
+            description = ', '.join(desc_parts)
+        
+        return {
+            'score': total_cves,
+            'description': description,
+            'details': details,
+            'severity_counts': severity_counts
+        }
+        
+    except Exception as e:
+        return {'score': 999, 'description': f'Error: {e}', 'details': []}
+
+def generate_eol_migration_analysis(current_version: PanOSVersion) -> List[Dict]:
+    """Generate comprehensive EOL migration analysis and return migration options."""
+    try:
+        eol_data = parse_panos_eol_data()
+        available_versions = get_available_panos_versions()
+        
+        if not eol_data or not available_versions:
+            return []
+        
+        today = datetime.now(timezone.utc).date()
+        
+        supported_families = []
+        for entry in eol_data:
+            version_cycle = entry.get('cycle', '')
+            eol_str = entry.get('eol')
+            
+            if eol_str and version_cycle:
+                try:
+                    major, minor = map(int, version_cycle.split('.'))
+                    eol_date = datetime.strptime(eol_str, "%Y-%m-%d").date()
+                    days_left = (eol_date - today).days
+                    
+                    if (major > current_version.major or 
+                        (major == current_version.major and minor > current_version.minor)) and days_left > 365:
+                        
+                        latest_version = get_latest_version_for_family(version_cycle, available_versions)
+                        
+                        supported_families.append({
+                            'family': version_cycle,
+                            'major': major,
+                            'minor': minor,
+                            'latest_version': latest_version,
+                            'eol_date': eol_date,
+                            'days_left': days_left
+                        })
+                except (ValueError, AttributeError):
+                    continue
+        
+        if not supported_families:
+            return []
+        
+        supported_families.sort(key=lambda x: (x['major'], x['minor']))
+        
+        migration_options = []
+        
+        for family_info in supported_families:
+            latest_ver = family_info['latest_version']
+            if latest_ver.endswith('.x'):
+                continue
+                
+            cve_analysis = evaluate_cve_score_for_version(latest_ver)
+            
+            migration_options.append({
+                'family': family_info['family'],
+                'latest_version': latest_ver,
+                'cve_score': cve_analysis['score'],
+                'cve_description': cve_analysis['description'],
+                'eol_date': family_info['eol_date'],
+                'days_left': family_info['days_left'],
+                'severity_counts': cve_analysis.get('severity_counts', {}),
+                'details': cve_analysis.get('details', [])
+            })
+        
+        migration_options.sort(key=lambda x: (x['cve_score'], -x['days_left']))
+        
+        return migration_options
+        
+    except Exception as e:
+        print(f"ZER016 ERROR: Unable to perform EOL migration analysis: {e}")
+        return []
+
 def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, input_version: PanOSVersion, eol_status: Optional[Dict] = None) -> str:
     """Generate smart upgrade recommendation based on severity analysis and common fix versions."""
     try:
-        # Group CVEs by severity and collect fix versions
+        available_versions = get_available_panos_versions()
+        eol_data = parse_panos_eol_data()
+        
+        all_versions = []
+        for version_str in available_versions:
+            try:
+                parsed_ver = PanOSVersion(version_str)
+                all_versions.append(parsed_ver)
+            except ValueError:
+                continue
+        
+        latest_overall = max(all_versions, key=lambda v: (v.major, v.minor, v.patch, v.hotfix))
+        
+        # Get EOL status for filtering
+        today = datetime.now(timezone.utc).date()
+        eol_families = {}
+        for entry in eol_data:
+            version_cycle = entry.get('cycle', '')
+            eol_str = entry.get('eol')
+            if eol_str and version_cycle:
+                eol_date = datetime.strptime(eol_str, "%Y-%m-%d").date()
+                days_left = (eol_date - today).days
+                eol_families[version_cycle] = {
+                    'eol_date': eol_date,
+                    'days_left': days_left,
+                    'is_expired': days_left < 0
+                }
+        
+        # Find latest version for each family, but only include non-expired families
+        family_latest = {}
+        for version in all_versions:
+            family = version.family
+            # Only include families that are not expired
+            if family in eol_families and not eol_families[family]['is_expired']:
+                if family not in family_latest or version > family_latest[family]:
+                    family_latest[family] = version
+        
         severity_groups = {
             'CRITICAL': [],
             'HIGH': [],
@@ -429,7 +632,6 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
         
         all_fix_versions = []
         
-        # Collect and categorize CVEs
         for cve in cve_list:
             severity = cve.get('severity', 'UNKNOWN').upper()
             fix_versions = find_applicable_fix_version(cve, version_family, input_version)
@@ -452,7 +654,6 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
         if not all_fix_versions:
             return "No specific upgrade recommendations available."
         
-        # Analyze fix versions and find patterns
         version_frequency = {}
         parsed_versions = []
         
@@ -466,14 +667,22 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
             except ValueError:
                 continue
         
-        # Sort versions by frequency and capability
         sorted_by_frequency = sorted(version_frequency.items(), key=lambda x: (-x[1], x[0]))
         
         recommendations = []
-        
-        # Main header with severity analysis
         recommendations.append("ZER016 SMART UPGRADE RECOMMENDATION:")
         recommendations.append("=" * 70)
+        recommendations.append(f"Current Version: {input_version} (Family: {input_version.family})")
+        recommendations.append(f"Latest Available Overall: {latest_overall}")
+        recommendations.append("")
+        
+        recommendations.append("LATEST VERSIONS BY FAMILY:")
+        recommendations.append("-" * 50)
+        sorted_families = sorted(family_latest.items(), key=lambda x: (int(x[0].split('.')[0]), int(x[0].split('.')[1])))
+        for family, latest_ver in sorted_families:
+            recommendations.append(f"  {family}: {latest_ver}")
+        recommendations.append("")
+        
         recommendations.append(f"{'Severity':<12} {'CVE Count':<12} {'Most Common Fix':<30}")
         recommendations.append("-" * 70)
         
@@ -481,7 +690,6 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
             if severity_groups[severity]:
                 count = len(severity_groups[severity])
                 
-                # Find most common fix for this severity
                 severity_fixes = []
                 for cve_info in severity_groups[severity]:
                     severity_fixes.extend(cve_info['fixes'])
@@ -502,9 +710,7 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
         
         recommendations.append("")
         
-        # Find the COMPLETE strategy - version that fixes ALL CVEs
         def count_fixed_cves(target_version_str):
-            """Count how many CVEs would be fixed by upgrading to target_version."""
             try:
                 target_version = PanOSVersion(target_version_str)
             except ValueError:
@@ -523,56 +729,45 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
                         continue
             return fixed_count
         
-        # Find version that fixes 100% of CVEs
         complete_version = None
         if parsed_versions:
-            # Sort all versions by version number
             all_unique_versions = list(set([str(v) for v in parsed_versions]))
             all_unique_versions.sort(key=lambda v: PanOSVersion(v).major * 10000 + 
                                                   PanOSVersion(v).minor * 1000 + 
                                                   PanOSVersion(v).patch * 100 + 
                                                   PanOSVersion(v).hotfix)
             
-            # Find first version that fixes all CVEs
             for version_str in all_unique_versions:
                 if count_fixed_cves(version_str) == len(cve_list):
                     complete_version = version_str
                     break
         
-        # Upgrade Strategy Table
-        recommendations.append("ZER016 UPGRADE STRATEGY OPTIONS:")
-        recommendations.append("=" * 90)
-        recommendations.append(f"{'Strategy':<15} {'Version':<15} {'CVEs Fixed':<12} {'Description':<40}")
-        recommendations.append("-" * 90)
-        
         strategies = []
         
-        # Strategy 0: EOL Migration if version is approaching EOL
         if eol_status and (eol_status['is_expired'] or eol_status['is_warning']):
-            eol_data = fetch_panos_eol_data()
-            next_supported = find_next_supported_version(input_version, eol_data)
+            migration_options = generate_eol_migration_analysis(input_version)
             
-            if next_supported:
+            for option in migration_options:
+                fixed_count = len(cve_list)
+                
                 strategies.append({
-                    'strategy': 'EOL_MIGRATION',
-                    'version': next_supported,
-                    'fixed': 'N/A',
-                    'description': f'Migrate from EOL/expiring {input_version.family} family (ZER016 Recommended)'
+                    'strategy': f'MIGRATE_{option["family"]}',
+                    'version': option['latest_version'],
+                    'fixed': f'{fixed_count}/{len(cve_list)}',
+                    'known_cves': option['cve_description'],
+                    'description': f'Migrate to {option["family"]} family'
                 })
         
-        # Strategy 1: COMPLETE - fixes 100% of CVEs
-        # Strategy 1: COMPLETE - fixes 100% of CVEs
         if complete_version:
             complete_count = count_fixed_cves(complete_version)
             strategies.append({
                 'strategy': 'COMPLETE',
                 'version': complete_version,
                 'fixed': f"{complete_count}/{len(cve_list)}",
+                'known_cves': 'N/A',
                 'description': f'Covers 100% of known CVEs for PAN-OS {input_version}'
             })
         
-        # Strategy 2: Same revision if possible
-        # Strategy 2: Same revision if possible
         same_revision_fixes = [v for v in parsed_versions if v.patch == input_version.patch]
         if same_revision_fixes:
             highest_same_revision = max(same_revision_fixes, key=lambda v: v.hotfix)
@@ -582,11 +777,10 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
                 'strategy': 'CONSERVATIVE',
                 'version': str(highest_same_revision),
                 'fixed': f"{fixed_count}/{len(cve_list)}",
+                'known_cves': 'N/A',
                 'description': f"Stays in {input_version.major}.{input_version.minor}.{input_version.patch} train"
             })
         
-        # Strategy 3: Most comprehensive single upgrade
-        # Strategy 3: Most comprehensive single upgrade
         if sorted_by_frequency:
             most_comprehensive = sorted_by_frequency[0][0]
             comprehensive_count = count_fixed_cves(most_comprehensive)
@@ -595,10 +789,10 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
                 'strategy': 'COMPREHENSIVE',
                 'version': most_comprehensive,
                 'fixed': f"{comprehensive_count}/{len(cve_list)}",
+                'known_cves': 'N/A',
                 'description': 'Most frequently recommended across all severities'
             })
         
-        # Strategy 4: Critical/High severity focus
         critical_high_fixes = []
         for severity in ['CRITICAL', 'HIGH']:
             for cve_info in severity_groups[severity]:
@@ -618,7 +812,6 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
             if critical_high_freq:
                 critical_focus = max(critical_high_freq.items(), key=lambda x: x[1])[0]
                 
-                # Count critical/high CVEs this fixes
                 critical_high_count = 0
                 total_critical_high = len(severity_groups['CRITICAL']) + len(severity_groups['HIGH'])
                 
@@ -639,72 +832,31 @@ def generate_upgrade_recommendation(cve_list: List[Dict], version_family: str, i
                         'strategy': 'SECURITY',
                         'version': critical_focus,
                         'fixed': f"{critical_high_count}/{total_critical_high}",
+                        'known_cves': 'N/A',
                         'description': 'Prioritizes Critical/High severity CVEs only'
                     })
         
-        # Print strategy table
-        for strategy in strategies:
-            recommendations.append(f"{strategy['strategy']:<15} {strategy['version']:<15} {strategy['fixed']:<12} {strategy['description']:<40}")
+        recommendations.append("ZER016 UPGRADE STRATEGY OPTIONS:")
+        recommendations.append("=" * 110)
+        recommendations.append(f"{'Strategy':<15} {'Version':<15} {'CVEs Fixed':<12} {'Known CVEs':<12} {'Description':<40}")
+        recommendations.append("-" * 110)
         
-        recommendations.append("=" * 90)
+        for strategy in strategies:
+            recommendations.append(f"{strategy['strategy']:<15} {strategy['version']:<15} {strategy['fixed']:<12} {strategy['known_cves']:<12} {strategy['description']:<40}")
+        
+        recommendations.append("=" * 110)
         
         return "\n".join(recommendations)
         
     except Exception as e:
         return f"Error generating recommendation: {e}"
-    """Find the applicable fix version that's >= input version for the given PAN-OS family."""
-    try:
-        versions = cve_data.get('version', [])
-        fixed_versions = cve_data.get('fixed', [])
-        
-        # Find the index of our version family
-        family_pattern = f"PAN-OS {version_family}"
-        
-        for i, ver in enumerate(versions):
-            if ver == family_pattern and i < len(fixed_versions):
-                fix_info = fixed_versions[i]
-                
-                if fix_info == "All":
-                    return "Not affected"
-                elif fix_info == "None":
-                    return "No fix available"
-                
-                # Parse multiple fix versions
-                fix_versions = parse_fix_versions(fix_info)
-                applicable_versions = []
-                
-                for fix_ver in fix_versions:
-                    if fix_ver in ["All", "None"]:
-                        applicable_versions.append(fix_ver)
-                        continue
-                    
-                    try:
-                        fix_version_obj = PanOSVersion(fix_ver)
-                        # Only include versions that are >= input version and same family
-                        if (fix_version_obj.family == input_version.family and 
-                            fix_version_obj >= input_version):
-                            applicable_versions.append(str(fix_version_obj))
-                    except ValueError:
-                        # If we can't parse it, include it as-is
-                        applicable_versions.append(fix_ver)
-                
-                if applicable_versions:
-                    return ", ".join(applicable_versions)
-                else:
-                    return "No applicable fix (version too old)"
-        
-        return "Version family not found"
-        
-    except Exception as e:
-        return f"Error parsing fix data: {e}"
 
 def display_cve_table(cve_list: List[Dict], version_family: str, input_version: PanOSVersion):
-    """Display CVE information in a formatted table based on configuration flags - ZER016 Enterprise."""
+    """Display CVE information in a formatted table based on configuration flags."""
     if not cve_list:
         print("ZER016 RESULT: No CVEs found for the specified version.")
         return
     
-    # Build header and format strings based on enabled columns
     headers = []
     formats = []
     total_width = 0
@@ -744,16 +896,13 @@ def display_cve_table(cve_list: List[Dict], version_family: str, input_version: 
         formats.append("45")
         total_width += 47
     
-    # Print header
     print(f"\nZER016 CVE REPORT for PAN-OS {version_family} family (showing fixes >= {input_version}):")
     print("=" * total_width)
     
-    # Create header format string
     header_format = " ".join([f"{{:<{fmt}}}" for fmt in formats])
     print(header_format.format(*headers))
     print("-" * total_width)
     
-    # Print data rows
     for cve in cve_list:
         row_data = []
         
@@ -777,23 +926,20 @@ def display_cve_table(cve_list: List[Dict], version_family: str, input_version: 
         if SHOW_DATE:
             date = cve.get('date', 'N/A')
             if date != 'N/A' and 'T' in date:
-                date = date.split('T')[0]  # Extract just the date part
+                date = date.split('T')[0]
             row_data.append(date)
         
         if SHOW_TITLE:
             title = cve.get('title', 'N/A')
-            # Truncate title if too long
             if len(title) > 42:
                 title = title[:39] + "..."
             row_data.append(title)
         
-        # Print the row
         print(header_format.format(*row_data))
 
 def export_to_csv(cve_list: List[Dict], version_family: str, input_version: PanOSVersion, filename: str):
-    """Export CVE data to CSV file based on configuration flags - ZER016 Enhanced."""
+    """Export CVE data to CSV file based on configuration flags."""
     try:
-        # Build fieldnames based on enabled columns
         fieldnames = []
         
         if SHOW_CVE_ID:
@@ -811,7 +957,6 @@ def export_to_csv(cve_list: List[Dict], version_family: str, input_version: PanO
         if SHOW_TITLE:
             fieldnames.append('Title')
         
-        # Always include Updated field and ZER016 metadata for CSV
         fieldnames.extend(['Updated', 'ZER016_Analysis_Date', 'ZER016_Input_Version'])
         
         with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -839,7 +984,6 @@ def export_to_csv(cve_list: List[Dict], version_family: str, input_version: PanO
                 if SHOW_TITLE:
                     row_data['Title'] = cve.get('title', 'N/A')
                 
-                # Always include metadata
                 row_data['Updated'] = cve.get('updated', 'N/A')
                 row_data['ZER016_Analysis_Date'] = analysis_date
                 row_data['ZER016_Input_Version'] = str(input_version)
@@ -853,7 +997,6 @@ def export_to_csv(cve_list: List[Dict], version_family: str, input_version: PanO
 
 def main():
     """Main function to run the ZER016 CVE checker."""
-    # Display ZER016 banner
     print(ZER016_BANNER)
     
     parser = argparse.ArgumentParser(
@@ -879,7 +1022,6 @@ Developed by ZER016 for enterprise security management.
     args = parser.parse_args()
     
     try:
-        # Parse input version
         input_version = PanOSVersion(args.version)
         version_family = input_version.family
         
@@ -887,19 +1029,16 @@ Developed by ZER016 for enterprise security management.
         print(f"Version family: {version_family}")
         print(f"Parsed version: {input_version}")
         
-        # Fetch CVE data
         cve_data = fetch_cve_data(args.version)
         
         if not cve_data:
             print("No CVE data retrieved. Please check the version format and try again.")
             return
         
-        # Display results
         display_cve_table(cve_data, version_family, input_version)
         
         print(f"\nTotal CVEs found: {len(cve_data)}")
         
-        # Check EOL status for input version
         eol_status = check_version_eol_status(input_version)
         if eol_status:
             print(f"\nEOL STATUS FOR {input_version.family}:")
@@ -923,15 +1062,12 @@ Developed by ZER016 for enterprise security management.
             print(f"EOL DATE: {eol_status['eol_date']}")
             print("=" * 50)
         
-        # Generate and display smart upgrade recommendation
         recommendation = generate_upgrade_recommendation(cve_data, version_family, input_version, eol_status)
         print(f"\n{recommendation}")
         
-        # Display EOL summary if requested
         if args.show_eol:
             display_eol_summary(show_expired=args.show_expired)
         
-        # Export to CSV if requested
         if args.csv:
             export_to_csv(cve_data, version_family, input_version, args.csv)
         
